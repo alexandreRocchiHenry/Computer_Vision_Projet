@@ -55,7 +55,7 @@ class SatImageReader:
         plt.colorbar()
         plt.title(f"Bande {band}")
 
-    def show_rgb(self, bands_rgb=(3, 2, 1)):
+    def show_rgb(self, bands_rgb=(1, 2, 3)):
         """
         Affiche une image RGB composée de trois bandes.
 
