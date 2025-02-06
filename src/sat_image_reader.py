@@ -55,13 +55,12 @@ class SatImageReader:
         plt.colorbar()
         plt.title(f"Bande {band}")
 
-    def show_rgb(self, bands_rgb=(1, 2, 3)):
+    def show_rgb(self, bands_rgb=(3, 2, 1)):
         """
-        Affiche une image RGB composée de trois bandes.
+        Affiche une image RGB composée de trois bandes, normalisées 0–255.
 
         Parameters:
         - bands_rgb (tuple): Indices des bandes pour rouge, vert et bleu.
-        - fig_size (tuple): Taille de la figure matplotlib.
         """
         if self.bandes < 3:
             print("Nombre insuffisant de bandes pour afficher une image RGB")
@@ -72,27 +71,24 @@ class SatImageReader:
             green = self.image.read(bands_rgb[1])
             blue = self.image.read(bands_rgb[2])
 
-            # Normalisation des bandes
-            red = (
-                (red - red.min()) / (red.max() - red.min())
-                if red.max() != red.min()
-                else np.zeros_like(red)
-            )
-            green = (
-                (green - green.min()) / (green.max() - green.min())
-                if green.max() != green.min()
-                else np.zeros_like(green)
-            )
-            blue = (
-                (blue - blue.min()) / (blue.max() - blue.min())
-                if blue.max() != blue.min()
-                else np.zeros_like(blue)
-            )
+            def normalize_to_255(band_array):
+                bmin, bmax = band_array.min(), band_array.max()
+                if bmax > bmin:
+                    # Normalisation 0–1 puis mise à l’échelle 0–255
+                    band_scaled = (band_array - bmin) / (bmax - bmin) * 255
+                else:
+                    # Cas d'une bande uniforme
+                    band_scaled = np.zeros_like(band_array)
+                return band_scaled.astype(np.uint8)
 
-            rgb_image = np.dstack((red, green, blue))
+            red_255 = normalize_to_255(red)
+            green_255 = normalize_to_255(green)
+            blue_255 = normalize_to_255(blue)
+
+            rgb_image = np.dstack((red_255, green_255, blue_255))
 
             plt.imshow(rgb_image)
-            plt.title("Image RGB")
+            plt.title("Image RGB (0–255)")
 
         except rasterio.errors.RasterioIOError as e:
             print(f"Erreur lors de la lecture des bandes RGB: {e}")
