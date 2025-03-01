@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import pandas as pd
+from datetime import datetime
 
 class ImageAlignementCheck:
     """
@@ -257,73 +258,93 @@ class ImageAlignementCheck:
 
 
     def analyze_images_in_directory(
-            self, folder_path, threshold=10, atol=0.1, ratio=0.75
-        ):
+        self,
+        folder_path,
+        threshold=10,
+        atol=0.1,
+        ratio=0.75
+    ):
         """
-        Analyzes the images in a folder and checks if the images are aligned
-        with respect to the previous image, and calculates pixel shifts.
+        Analyzes images in a folder, but only those dated the 1st of each month
+        (based on a 'YYYY-MM-DD.tif' naming convention). Checks alignment of each
+        image with the previous one in chronological order, and calculates pixel
+        shifts.
 
         Args:
-            folder_path (str): The path of the folder containing the images.
-            threshold (int): The minimum number of good matches to check 
-            alignment.
-            atol (float): The absolute tolerance for the homography.
-            ratio (float): The ratio for the Lowe's ratio testin keypoint
-            matching.
+            folder_path (str): Path of the folder containing the images.
+            threshold (int): Minimum number of good matches to confirm alignment.
+            atol (float): Absolute tolerance for checking if homography is close
+                to the identity matrix.
+            ratio (float): Ratio used in the Lowe's ratio test for keypoint matching.
 
         Returns:
-            list: A list of results (True/False) indicating if the images are 
-            aligned.
+            list: Results of alignment checks ("True", "False", or "Error").
             list: Mean pixel shifts between consecutive images.
             list: Max pixel shifts between consecutive images.
         """
+
+        def is_first_of_month(filename):
+            """
+            Checks if the file name (format 'YYYY-MM-DD.tif') corresponds to the
+            1st day of the month.
+            """
+            base = filename.rsplit('.', 1)[0]
+            try:
+                dt = datetime.strptime(base, '%Y-%m-%d')
+                return dt.day == 1
+            except ValueError:
+                return False
+
+        # List .tif files whose date is the first of the month
         image_files = [
-            f for f in os.listdir(folder_path) if f.endswith(('.tif'))
+            f for f in os.listdir(folder_path)
+            if f.endswith('.tif') and is_first_of_month(f)
         ]
-        image_files.sort()  
+        image_files.sort()
 
         results = []
         mean_shifts = []
-        max_shifts = []  
-        
+        max_shifts = []
+
+        if len(image_files) < 2:
+            return results, mean_shifts, max_shifts
+
         previous_image = cv2.imread(
             os.path.join(folder_path, image_files[0]), cv2.IMREAD_UNCHANGED
         )
 
         for i in range(1, len(image_files)):
-            print(f"Analyse des images {i-1} et {i}...")
-            current_image = cv2.imread(
-                os.path.join(folder_path, image_files[i]), cv2.IMREAD_UNCHANGED
+            current_path = os.path.join(folder_path, image_files[i])
+            current_image = cv2.imread(current_path, cv2.IMREAD_UNCHANGED)
+
+            # Check alignment
+            is_aligned = self.image_alignement_check(
+                previous_image,
+                current_image,
+                threshold=threshold,
+                atol=atol,
+                ratio=ratio
             )
-            try:
-                # Vérifier si l'image i est alignée avec l'image i-1
-                is_aligned = self.image_alignement_check(
-                    previous_image, current_image, threshold=threshold, 
-                    atol= atol, ratio=ratio
-                )
-                # Stocker le résultat (oui si alignée, sinon non)
-                if is_aligned:
-                    results.append('True')
-                else:
-                    results.append('False')
-                # Calculate pixel shifts
-                mean_shift, max_shift = self.calculate_pixel_shift(
-                    previous_image, current_image, ratio=ratio
-                )
-                
-                # Append pixel shift values
-                mean_shifts.append(mean_shift if mean_shift is not None else 'NA')
-                max_shifts.append(max_shift if max_shift is not None else 'NA')
+            if is_aligned:
+                results.append('True')
+            else:
+                results.append('False')
 
-            except Exception as e:
-                print(f"Erreur lors de l'analyse des images {i-1} et {i}: {str(e)}")
-                results.append('Error')
-                mean_shifts.append('Error')
-                max_shifts.append('Error')
+            # Calculate pixel shifts
+            mean_shift, max_shift = self.calculate_pixel_shift(
+                previous_image,
+                current_image,
+                ratio=ratio
+            )
+            if mean_shift is None:
+                mean_shifts.append('NA')
+                max_shifts.append('NA')
+            else:
+                mean_shifts.append(mean_shift)
+                max_shifts.append(max_shift)
 
-            # Mettre à jour l'image précédente
             previous_image = current_image
-        
+
         return results, mean_shifts, max_shifts
 
 
