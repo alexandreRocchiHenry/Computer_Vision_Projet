@@ -244,6 +244,11 @@ if __name__ == "__main__":
 
     dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
 
+    images, labels = next(iter(dataloader))
+
+    print("Images shape:", images.shape)
+    print("Labels shape:", labels.shape)
+
     print("\n")
     print("-------------------------------------")
     print("Creating UNet and ConvNeXtUNet models")
