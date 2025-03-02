@@ -115,10 +115,10 @@ class UNet(nn.Module):
         self.decoder4 = self.upconv_block(512 + 512, 256)  # Corrected to handle concatenation with 512 + 512
         self.decoder3 = self.upconv_block(256 + 256, 128)  # Adjusted for concatenation
         self.decoder2 = self.upconv_block(128 + 128, 64)   # Adjusted for concatenation
-        self.decoder1 = self.upconv_block(64 + 64, out_channels)  # Adjusted for concatenation
+        self.decoder1 = self.upconv_block(128, out_channels)  # Adjusted for concatenation
         
         # Final output layer (Softmax activation for multiclass)
-        self.final_conv = nn.Conv2d(64, out_channels, kernel_size=1)
+        self.final_conv = nn.Conv2d(128, out_channels, kernel_size=1)
 
     def conv_block(self, in_channels, out_channels):
         return nn.Sequential(
@@ -137,17 +137,27 @@ class UNet(nn.Module):
     def forward(self, x):
         # Contracting path
         enc1 = self.encoder1(x)
+        print("Enc1", enc1.shape)
         enc2 = self.encoder2(F.max_pool2d(enc1, 2))
+        print("Enc2", enc2.shape)
         enc3 = self.encoder3(F.max_pool2d(enc2, 2))
+        print("Enc3", enc3.shape)
         enc4 = self.encoder4(F.max_pool2d(enc3, 2))
+        print("Enc4", enc4.shape)
         enc5 = self.encoder5(F.max_pool2d(enc4, 2))
+        print("Enc5", enc5.shape)
         
         # Expanding path
         dec5 = self.decoder5(enc5)
+        print("Dec5", dec5.shape)
         dec4 = self.decoder4(torch.cat([dec5, enc4], 1))
+        print("Dec4", dec4.shape)
         dec3 = self.decoder3(torch.cat([dec4, enc3], 1))
+        print("Dec3", dec3.shape)
         dec2 = self.decoder2(torch.cat([dec3, enc2], 1))
+        print("Dec2", dec2.shape)
         dec1 = self.decoder1(torch.cat([dec2, enc1], 1))
+        print("Dec1", dec1.shape)
         
         # Final output layer
         out = self.final_conv(dec1)
@@ -200,20 +210,27 @@ class ConvNeXtUNet(nn.Module):
         
         return out
 
-def train(model, dataloader, criterion, optimizer, num_epochs):
+def train(model, dataloader, criterion, optimizer, num_epochs, device):
     model.train()
     for epoch in range(num_epochs):
         for i, (images, labels) in enumerate(dataloader):
+            images, labels = images.to(device), labels.to(device)
+            print("Optimizing")
             optimizer.zero_grad()
+            print("Output")
             outputs = model(images)
+            print("Loss")
             loss = criterion(outputs, labels)
+            print("Backward")
             loss.backward()
+            print("Step")
             optimizer.step()
             print(f"Epoch {epoch+1}/{num_epochs}, Step {i+1}, Loss {loss.item()}")
     print("Training finished")
 
 if __name__ == "__main__":
 
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     start_date = "2018-05-01"
     end_date = "2019-12-31"
 
@@ -225,7 +242,7 @@ if __name__ == "__main__":
 
     dataset = CustomDataset(df_merged, start_date, end_date)
 
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True)
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True)
 
     print("\n")
     print("-------------------------------------")
@@ -234,6 +251,7 @@ if __name__ == "__main__":
     print("\n")
 
     model_unet = UNet(in_channels=3, out_channels=7)
+    model_unet = model_unet.to(device)
     # model_convunet = ConvNeXtUNet(in_channels=3, out_channels=7)
 
     criterion = nn.CrossEntropyLoss()
@@ -248,7 +266,7 @@ if __name__ == "__main__":
     print("-------------------------------------")
     print("\n")
 
-    train(model_unet, dataloader, criterion, optimizer_unet, num_epochs=1)
+    train(model_unet, dataloader, criterion, optimizer_unet, num_epochs=1, device=device)
 
     # train(model_convunet, dataloader, criterion, optimizer_convunet, num_epochs=1)
 
