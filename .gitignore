@@ -174,3 +174,4 @@ cython_debug/
 
 # env perso
 .env_computer_vision/
+models/

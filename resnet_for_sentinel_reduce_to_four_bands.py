@@ -36,7 +36,6 @@ assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "La somme des rat
 n_total = len(df_filtered_shuffled)
 n_train = int(train_ratio * n_total)
 n_val = int(val_ratio * n_total)
-# Le reste pour le test
 n_test = n_total - (n_train + n_val)
 
 # 5. Découpage en trois sous-ensembles
@@ -51,27 +50,16 @@ test_dataset = FourBandSegDataset(test_df)
 
 # 7. Création des DataLoader
 train_loader = DataLoader(
-    train_dataset,
-    batch_size=8,
-    shuffle=True,  # On mélange en entraînement
-    num_workers=4,
-    collate_fn=skip_none_collate_fn,
+    train_dataset, batch_size=16,
+    shuffle=True, num_workers=4, collate_fn=skip_none_collate_fn,
 )
-
 val_loader = DataLoader(
-    val_dataset,
-    batch_size=8,
-    shuffle=False,  # Pas besoin de shuffle pour validation
-    num_workers=4,
-    collate_fn=skip_none_collate_fn,
+    val_dataset, batch_size=16,
+    shuffle=False, num_workers=4, collate_fn=skip_none_collate_fn,
 )
-
 test_loader = DataLoader(
-    test_dataset,
-    batch_size=8,
-    shuffle=False,  # Pas besoin de shuffle pour test
-    num_workers=4,
-    collate_fn=skip_none_collate_fn,
+    test_dataset, batch_size=16,
+    shuffle=False, num_workers=4, collate_fn=skip_none_collate_fn,
 )
 
 print("Taille Entraînement :", len(train_dataset))
@@ -79,6 +67,7 @@ print("Taille Validation   :", len(val_dataset))
 print("Taille Test         :", len(test_dataset))
 
 print("Chargement DataLoaders terminé.")
+
 # Charger le ResNet pré-entraîné
 model_resnet = resnet50(weights=ResNet50_Weights.SENTINEL2_ALL_MOCO)
 state_dict_res = model_resnet.state_dict()
@@ -91,18 +80,19 @@ farseg = FarSeg(backbone="resnet50", classes=8, backbone_pretrained=False)
 # Modifier la première couche convolutive
 old_conv = farseg.backbone.conv1
 new_conv = nn.Conv2d(
-    in_channels=4,
-    out_channels=old_conv.out_channels,
-    kernel_size=old_conv.kernel_size,
-    stride=old_conv.stride,
-    padding=old_conv.padding,
-    bias=(old_conv.bias is not None),
+    in_channels=4, out_channels=old_conv.out_channels, kernel_size=old_conv.kernel_size,
+    stride=old_conv.stride, padding=old_conv.padding, bias=(old_conv.bias is not None),
 )
 new_conv.weight.data[:, :3, :, :] = model_resnet.conv1.weight.data[:, :3, :, :]
 nn.init.kaiming_normal_(new_conv.weight.data[:, 3:4, :, :])
 farseg.backbone.conv1 = new_conv
 farseg.backbone.load_state_dict(state_dict_res, strict=False)
 print("Model Created")
+
+# Fonctions pour gérer DataParallel
+def get_model(farseg):
+    """Retourne le modèle encapsulé dans DataParallel si nécessaire."""
+    return farseg.module if isinstance(farseg, nn.DataParallel) else farseg
 
 def freeze_all_layers(model):
     for param in model.parameters():
@@ -113,10 +103,10 @@ def unfreeze_module(module):
         param.requires_grad = True
 
 print("Start freezing all")
-freeze_all_layers(farseg.backbone)
-unfreeze_module(farseg.backbone.layer4)
+freeze_all_layers(get_model(farseg).backbone)
+unfreeze_module(get_model(farseg).backbone.layer4)
 
-for name, param in farseg.named_parameters():
+for name, param in get_model(farseg).named_parameters():
     if "head" in name:
         param.requires_grad = True
 
@@ -124,20 +114,17 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using the device : ", device)
 print("Nombre de GPUs :", torch.cuda.device_count())
 
-if torch.cuda.device_count()==2:
-    farseg = nn.DataParallel(farseg, device_ids=[0, 1])
-
-if torch.cuda.device_count()==4:
-    farseg = nn.DataParallel(farseg, device_ids=[0, 1, 2, 3])
+if torch.cuda.device_count() > 1:
+    farseg = nn.DataParallel(farseg, device_ids=list(range(torch.cuda.device_count())))
 
 farseg = farseg.to(device)
 
 criterion = nn.CrossEntropyLoss(ignore_index=255)
 optimizer = optim.Adam(filter(lambda p: p.requires_grad, farseg.parameters()), lr=1e-4)
 
-num_epochs_phase1 = 5
-num_epochs_phase2 = 5
-num_epochs_phase3 = 5
+num_epochs_phase1 = 10
+num_epochs_phase2 = 10
+num_epochs_phase3 = 20
 print("Start the training")
 
 ###############################################################################
@@ -148,7 +135,7 @@ for epoch in range(num_epochs_phase1):
     farseg.train()
     running_loss = 0.0
     print(f"Epoch {epoch+1}/{num_epochs_phase1} (Phase 1)")
-    
+
     for images, labels in tqdm(train_loader, desc=f"Training Epoch {epoch+1}"):
         images, labels = images.to(device), labels.to(device)
         optimizer.zero_grad()
@@ -157,7 +144,7 @@ for epoch in range(num_epochs_phase1):
         loss.backward()
         optimizer.step()
         running_loss += loss.item()
-    
+
     print(f"Epoch {epoch+1} Loss: {running_loss/len(train_loader):.4f}")
     val_loss, val_miou = evaluate_model(farseg, val_loader, criterion, device=device, num_classes=8)
     print(f"Validation Loss : {val_loss:.4f}")
@@ -166,7 +153,7 @@ for epoch in range(num_epochs_phase1):
 ###############################################################################
 # Phase 2 : Débloquer layer3
 ###############################################################################
-unfreeze_module(farseg.backbone.layer3)
+unfreeze_module(get_model(farseg).backbone.layer3)
 for param_group in optimizer.param_groups:
     param_group["lr"] = 1e-5
 print("Learning rate : ",param_group["lr"])
@@ -192,9 +179,9 @@ for epoch in range(num_epochs_phase2):
 ###############################################################################
 # Phase 3 : Débloquer tout le backbone
 ###############################################################################
-unfreeze_module(farseg.backbone.layer2)
-unfreeze_module(farseg.backbone.layer1)
-unfreeze_module(farseg.backbone.conv1)
+unfreeze_module(get_model(farseg).backbone.layer2)
+unfreeze_module(get_model(farseg).backbone.layer1)
+unfreeze_module(get_model(farseg).backbone.conv1)
 
 for param_group in optimizer.param_groups:
     param_group["lr"] = 5e-6
@@ -222,7 +209,7 @@ for epoch in range(num_epochs_phase3):
 print("Entraînement terminé !")
 
 # save model
-torch.save(farseg.state_dict(), "models/farseg_model.pth")
+torch.save(get_model(farseg).state_dict(), "models/farseg_model.pth")
 
 ###############################################################################
 # Phase 4 : Évaluation
@@ -230,7 +217,7 @@ torch.save(farseg.state_dict(), "models/farseg_model.pth")
 
 # 1) Charger le meilleur modèle (si vous l’avez sauvegardé séparément)
 farseg_best = FarSeg(backbone="resnet50", classes=8, backbone_pretrained=False)
-farseg_best.load_state_dict(torch.load("models/farseg_best_val.pth"))
+farseg_best.load_state_dict(torch.load("models/farseg_model.pth"))
 farseg_best = farseg_best.to(device)
 
 # 2) Évaluation sur le test set
