@@ -143,6 +143,7 @@ print("Start the training")
 ###############################################################################
 # Phase 1 : Entraîner layer4 + head FarSeg
 ###############################################################################
+print("Learning rate : ",param_group["lr"])
 for epoch in range(num_epochs_phase1):
     farseg.train()
     running_loss = 0.0
@@ -168,7 +169,7 @@ for epoch in range(num_epochs_phase1):
 unfreeze_module(farseg.backbone.layer3)
 for param_group in optimizer.param_groups:
     param_group["lr"] = 1e-5
-
+print("Learning rate : ",param_group["lr"])
 for epoch in range(num_epochs_phase2):
     farseg.train()
     running_loss = 0.0
@@ -197,6 +198,7 @@ unfreeze_module(farseg.backbone.conv1)
 
 for param_group in optimizer.param_groups:
     param_group["lr"] = 5e-6
+print("Learning rate : ",param_group["lr"])
 
 for epoch in range(num_epochs_phase3):
     farseg.train()
