@@ -41,9 +41,10 @@ def replace_date_in_path(path):
 ###############################################################################
 #                         CLASSE FourBandSegDataset
 ###############################################################################
+
 class FourBandSegDataset(Dataset):
     """
-    Dataset pour la segmentation avec 4 canaux d'images (RGB+IR) et un masque.
+    Dataset pour la segmentation avec 4 canaux d'images (RGB+IR) et un masque de 8 classes.
     Seules les lignes avec alignment == True sont utilisées.
     """
 
@@ -58,19 +59,19 @@ class FourBandSegDataset(Dataset):
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
 
-        # Récupération des chemins
+        # Récupération des chemins des fichiers
         planet_path_hyphen = row.get("planet_path", "")
         labels_path_hyphen = row.get("labels_path", "")
 
-        # Générer leur version avec underscore UNIQUEMENT POUR LA DATE
+        # Gestion des versions avec underscore pour la date
         planet_path_underscore = replace_date_in_path(planet_path_hyphen)
         labels_path_underscore = replace_date_in_path(labels_path_hyphen)
 
-        # Vérifier l'existence des fichiers
+        # Vérification de l'existence des fichiers
         planet_path = planet_path_hyphen if os.path.exists(planet_path_hyphen) else planet_path_underscore
         label_path = labels_path_hyphen if os.path.exists(labels_path_hyphen) else labels_path_underscore
 
-        # Vérification finale : on ignore si aucun fichier n'existe
+        # Ignorer si les fichiers sont inexistants
         if not os.path.exists(planet_path) or not os.path.exists(label_path):
             return None
 
@@ -81,22 +82,38 @@ class FourBandSegDataset(Dataset):
         except:
             return None
 
-        # Lecture du masque
+        # Lecture du masque multi-classe (8 canaux binaires)
         try:
             with rasterio.open(label_path) as src:
-                label = src.read(1)  # [H, W]
+                label_8bands = src.read()  # [8, H, W], valeurs {0, 255}
         except:
             return None
         
+        # Conversion en masque unique d'indices de classe
+        bin_mask = (label_8bands == 255)  # Convertir en booléen : 1 = présent, 0 = absent
+        count_per_pixel = bin_mask.sum(axis=0)  # Nombre de classes présentes par pixel
+
+        # Initialiser la carte de classes avec la première classe active par pixel
+        class_indices = np.argmax(bin_mask, axis=0)
+
+        # Pixels avec plusieurs classes actives (conflits)
+        conflicts = (count_per_pixel > 1)
+        class_indices[conflicts] = 255  # On ignore ces pixels
+
+        # Pixels sans aucune classe
+        no_class = (count_per_pixel == 0)
+        class_indices[no_class] = 255  # On ignore ces pixels (ou mettre 0 si vous avez une classe "fond")
+
         # Conversion en tenseurs PyTorch
         image_tensor = torch.from_numpy(image).float()  # [4, H, W]
-        label_tensor = torch.from_numpy(label).long()   # [H, W]
+        label_tensor = torch.from_numpy(class_indices).long()  # [H, W]
 
-        # (Optionnel) transform / augmentation
+        # (Optionnel) transformations / augmentations
         if self.transform is not None:
-            pass
+            image_tensor, label_tensor = self.transform(image_tensor, label_tensor)
 
         return image_tensor, label_tensor
+
 
 ###############################################################################
 
