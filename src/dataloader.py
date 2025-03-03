@@ -15,7 +15,6 @@ def skip_none_collate_fn(batch):
     Si tous les éléments du batch sont None, renvoie None.
     """
     filtered_batch = [x for x in batch if x is not None]
-    print(f"Batch après filtrage: {len(filtered_batch)} éléments")  # Debug
     return None if len(filtered_batch) == 0 else torch.utils.data.dataloader.default_collate(filtered_batch)
 
 

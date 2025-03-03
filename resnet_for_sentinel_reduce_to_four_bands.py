@@ -24,7 +24,7 @@ train_dataset = FourBandSegDataset(df_all)
 # Créer le DataLoader
 train_loader = DataLoader(
     train_dataset,
-    batch_size=4,
+    batch_size=16,
     shuffle=True,
     num_workers=4,
     collate_fn=skip_none_collate_fn,
@@ -73,6 +73,7 @@ for name, param in farseg.named_parameters():
         param.requires_grad = True
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using the device : ", device)
 farseg = farseg.to(device)
 criterion = nn.CrossEntropyLoss(ignore_index=255)
 optimizer = optim.Adam(filter(lambda p: p.requires_grad, farseg.parameters()), lr=1e-4)
