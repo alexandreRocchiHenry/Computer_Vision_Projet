@@ -24,7 +24,7 @@ train_dataset = FourBandSegDataset(df_all)
 # Créer le DataLoader
 train_loader = DataLoader(
     train_dataset,
-    batch_size=16,
+    batch_size=8,
     shuffle=True,
     num_workers=4,
     collate_fn=skip_none_collate_fn,
