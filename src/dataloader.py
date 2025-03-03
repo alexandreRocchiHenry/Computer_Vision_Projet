@@ -14,10 +14,10 @@ def skip_none_collate_fn(batch):
     Filtre les éléments None avant de les assembler en batch.
     Si tous les éléments du batch sont None, renvoie None.
     """
-    filtered_batch = [sample for sample in batch if sample is not None]
-    if len(filtered_batch) == 0:
-        return None  # Aucun exemple valide dans ce batch
-    return default_collate(filtered_batch)
+    filtered_batch = [x for x in batch if x is not None]
+    print(f"Batch après filtrage: {len(filtered_batch)} éléments")  # Debug
+    return None if len(filtered_batch) == 0 else torch.utils.data.dataloader.default_collate(filtered_batch)
+
 
 ###############################################################################
 #                  FONCTION UTILITAIRE POUR MODIFIER UNIQUEMENT LA DATE
