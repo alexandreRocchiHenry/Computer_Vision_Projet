@@ -122,7 +122,16 @@ for name, param in farseg.named_parameters():
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using the device : ", device)
+print("Nombre de GPUs :", torch.cuda.device_count())
+
+if torch.cuda.device_count()==2:
+    farseg = nn.DataParallel(farseg, device_ids=[0, 1])
+
+if torch.cuda.device_count()==4:
+    farseg = nn.DataParallel(farseg, device_ids=[0, 1, 2, 3])
+
 farseg = farseg.to(device)
+
 criterion = nn.CrossEntropyLoss(ignore_index=255)
 optimizer = optim.Adam(filter(lambda p: p.requires_grad, farseg.parameters()), lr=1e-4)
 
