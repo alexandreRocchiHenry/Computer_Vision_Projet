@@ -143,7 +143,7 @@ print("Start the training")
 ###############################################################################
 # Phase 1 : Entraîner layer4 + head FarSeg
 ###############################################################################
-print("Learning rate : ",param_group["lr"])
+
 for epoch in range(num_epochs_phase1):
     farseg.train()
     running_loss = 0.0
