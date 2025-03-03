@@ -12,6 +12,7 @@ import os
 
 sys.path.append(os.path.abspath("src"))
 from dataloader import FourBandSegDataset
+from dataloader import skip_none_collate_fn
 
 # Lecture du CSV (vous pouvez adapter le chemin vers votre fichier)
 df_all = pd.read_csv("df_merged_extended.csv")
@@ -24,7 +25,8 @@ train_loader = DataLoader(
     train_dataset,
     batch_size=4,  # ajuster selon votre RAM
     shuffle=True,
-    num_workers=4  # ou 0 si souci sur Windows
+    num_workers=4,  # ou 0 si souci sur Windows
+    collate_fn=skip_none_collate_fn,
 )
 ################################################################################
 #   3) Charger un ResNet pré-entraîné, l'adapter à 4 canaux et insérer dans FarSeg
