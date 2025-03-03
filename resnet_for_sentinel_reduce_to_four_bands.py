@@ -14,23 +14,71 @@ from tqdm import tqdm  # Importer tqdm pour les barres de progression
 sys.path.append(os.path.abspath("src"))
 from dataloader import FourBandSegDataset
 from dataloader import skip_none_collate_fn
+from dataloader import evaluate_model
 
-# Lecture du CSV
+# 1. Lecture du CSV complet
 df_all = pd.read_csv("df_merged_extended.csv")
 
-# Instancier le Dataset
-train_dataset = FourBandSegDataset(df_all)
+# 2. Filtrer uniquement les lignes alignées
+df_filtered = df_all[df_all["alignment"] == True].copy().reset_index(drop=True)
 
-# Créer le DataLoader
+# 3. Mélanger les données
+df_filtered_shuffled = df_filtered.sample(frac=1, random_state=42).reset_index(drop=True)
+
+# 4. Définir les proportions pour train / val / test
+train_ratio = 0.6
+val_ratio = 0.2
+test_ratio = 0.2
+
+# Vérification: doit être égal à 1.0
+assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "La somme des ratios doit faire 1"
+
+n_total = len(df_filtered_shuffled)
+n_train = int(train_ratio * n_total)
+n_val = int(val_ratio * n_total)
+# Le reste pour le test
+n_test = n_total - (n_train + n_val)
+
+# 5. Découpage en trois sous-ensembles
+train_df = df_filtered_shuffled.iloc[:n_train].reset_index(drop=True)
+val_df = df_filtered_shuffled.iloc[n_train:n_train+n_val].reset_index(drop=True)
+test_df = df_filtered_shuffled.iloc[n_train+n_val:].reset_index(drop=True)
+
+# 6. Instanciation des Dataset
+train_dataset = FourBandSegDataset(train_df)
+val_dataset = FourBandSegDataset(val_df)
+test_dataset = FourBandSegDataset(test_df)
+
+# 7. Création des DataLoader
 train_loader = DataLoader(
     train_dataset,
     batch_size=8,
-    shuffle=True,
+    shuffle=True,  # On mélange en entraînement
     num_workers=4,
     collate_fn=skip_none_collate_fn,
 )
-print("train_loader created!")
 
+val_loader = DataLoader(
+    val_dataset,
+    batch_size=8,
+    shuffle=False,  # Pas besoin de shuffle pour validation
+    num_workers=4,
+    collate_fn=skip_none_collate_fn,
+)
+
+test_loader = DataLoader(
+    test_dataset,
+    batch_size=8,
+    shuffle=False,  # Pas besoin de shuffle pour test
+    num_workers=4,
+    collate_fn=skip_none_collate_fn,
+)
+
+print("Taille Entraînement :", len(train_dataset))
+print("Taille Validation   :", len(val_dataset))
+print("Taille Test         :", len(test_dataset))
+
+print("Chargement DataLoaders terminé.")
 # Charger le ResNet pré-entraîné
 model_resnet = resnet50(weights=ResNet50_Weights.SENTINEL2_ALL_MOCO)
 state_dict_res = model_resnet.state_dict()
@@ -101,6 +149,9 @@ for epoch in range(num_epochs_phase1):
         running_loss += loss.item()
     
     print(f"Epoch {epoch+1} Loss: {running_loss/len(train_loader):.4f}")
+    val_loss, val_miou = evaluate_model(farseg, val_loader, criterion, device=device, num_classes=8)
+    print(f"Validation Loss : {val_loss:.4f}")
+    print(f"Validation mIoU : {val_miou:.4f}")
 
 ###############################################################################
 # Phase 2 : Débloquer layer3
@@ -124,6 +175,9 @@ for epoch in range(num_epochs_phase2):
         running_loss += loss.item()
     
     print(f"Epoch {epoch+1} Loss: {running_loss/len(train_loader):.4f}")
+    val_loss, val_miou = evaluate_model(farseg, val_loader, criterion, device=device, num_classes=8)
+    print(f"Validation Loss : {val_loss:.4f}")
+    print(f"Validation mIoU : {val_miou:.4f}")
 
 ###############################################################################
 # Phase 3 : Débloquer tout le backbone
@@ -150,5 +204,32 @@ for epoch in range(num_epochs_phase3):
         running_loss += loss.item()
     
     print(f"Epoch {epoch+1} Loss: {running_loss/len(train_loader):.4f}")
+    val_loss, val_miou = evaluate_model(farseg, val_loader, criterion, device=device, num_classes=8)
+    print(f"Validation Loss : {val_loss:.4f}")
+    print(f"Validation mIoU : {val_miou:.4f}")
 
 print("Entraînement terminé !")
+
+# save model
+torch.save(farseg.state_dict(), "models/farseg_model.pth")
+
+###############################################################################
+# Phase 4 : Évaluation
+###############################################################################
+
+# 1) Charger le meilleur modèle (si vous l’avez sauvegardé séparément)
+farseg_best = FarSeg(backbone="resnet50", classes=8, backbone_pretrained=False)
+farseg_best.load_state_dict(torch.load("models/farseg_best_val.pth"))
+farseg_best = farseg_best.to(device)
+
+# 2) Évaluation sur le test set
+test_loss, test_miou = evaluate_model(
+    farseg_best,
+    test_loader,     # DataLoader créé pour l’ensemble de test
+    criterion,       # Même loss que pour l'entraînement
+    device=device, 
+    num_classes=8
+)
+
+print(f"Test Loss : {test_loss:.4f}")
+print(f"Test mIoU : {test_miou:.4f}")

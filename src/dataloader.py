@@ -5,6 +5,7 @@ import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader, default_collate
 import re
+from tqdm import tqdm
 
 ###############################################################################
 #                  FONCTION COLLATE POUR IGNORER LES ÉCHANTILLONS None
@@ -99,3 +100,70 @@ class FourBandSegDataset(Dataset):
 
 ###############################################################################
 
+###############################################################################
+#                 Fonctions pour évaluer le modèle sur la validation
+###############################################################################
+
+def compute_iou_per_class(pred, target, num_classes=8, ignore_index=255):
+    """
+    Calcule l’IoU par classe pour une prédiction et un masque de vérité terrain.
+    pred   : Tensor (H, W)
+    target : Tensor (H, W)
+    """
+    ious = []
+    for class_id in range(num_classes):
+        # On crée un masque pour ignorer les pixels à 255
+        valid_mask = (target != ignore_index)
+        
+        pred_class = (pred == class_id) & valid_mask
+        target_class = (target == class_id) & valid_mask
+        
+        intersection = (pred_class & target_class).sum().item()
+        union = (pred_class | target_class).sum().item()
+
+        if union == 0:
+            iou = np.nan  # aucune occurrence de cette classe
+        else:
+            iou = intersection / union
+        
+        ious.append(iou)
+    return ious
+
+
+def evaluate_model(model, val_loader, criterion, device, num_classes=8, ignore_index=255):
+    """
+    Évalue la perte moyenne (loss) et le mIoU du modèle sur l’ensemble de validation.
+    """
+    model.eval()
+    running_loss = 0.0
+    all_ious = []
+
+    with torch.no_grad():
+        for images, labels in tqdm(val_loader, desc="Validation"):
+            images, labels = images.to(device), labels.to(device)
+            
+            outputs = model(images)  # [batch_size, num_classes, H, W]
+            loss = criterion(outputs, labels)
+            running_loss += loss.item()
+            
+            # Prédiction classe par pixel
+            preds = torch.argmax(outputs, dim=1)  # [batch_size, H, W]
+            
+            # Calcul de l’IoU par classe pour chaque image du batch
+            for i in range(len(preds)):
+                ious = compute_iou_per_class(
+                    preds[i], labels[i],
+                    num_classes=num_classes,
+                    ignore_index=ignore_index
+                )
+                all_ious.append(ious)
+    
+    # Moyenne de la perte sur tout le jeu de validation
+    val_loss = running_loss / len(val_loader) if len(val_loader) > 0 else 0.0
+
+    # Calcul du mIoU
+    all_ious = np.array(all_ious)  # shape = (total_images, num_classes)
+    mean_iou_per_class = np.nanmean(all_ious, axis=0)  # moyenne par colonne
+    miou = np.nanmean(mean_iou_per_class)               # moyenne sur les classes
+
+    return val_loss, miou
