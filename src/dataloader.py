@@ -108,6 +108,14 @@ class FourBandSegDataset(Dataset):
         image_tensor = torch.from_numpy(image).float()  # [4, H, W]
         label_tensor = torch.from_numpy(class_indices).long()  # [H, W]
 
+        # Normalisation Min-Max entre 0 et 1
+        image_tensor = (image_tensor - image_tensor.min()) / (image_tensor.max() - image_tensor.min())
+
+        # Normalisation standard pour ResNet
+        mean = torch.tensor([0.485, 0.456, 0.406, 0.5]).view(4, 1, 1)  # ImageNet + 4e bande
+        std = torch.tensor([0.229, 0.224, 0.225, 0.5]).view(4, 1, 1)    # ImageNet + 4e bande
+        image_tensor = (image_tensor - mean) / std
+
         # (Optionnel) transformations / augmentations
         if self.transform is not None:
             image_tensor, label_tensor = self.transform(image_tensor, label_tensor)

@@ -128,27 +128,46 @@ num_epochs_phase2 = 10
 num_epochs_phase3 = 20
 print("Start the training")
 
-###############################################################################
-# Phase 1 : Entraîner layer4 + head FarSeg
-###############################################################################
-scaler = GradScaler("cuda")   # Define AMP scaler
-scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
+###############################################################################
+# Phase 1 : Entraîner layer4 + head FarSeg avec vérifications NaN
+###############################################################################
+scaler = GradScaler(enabled=True)  # Activation de l'AMP (désactivez en cas de problème)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
 for epoch in range(num_epochs_phase1):
     farseg.train()
     running_loss = 0.0
     print(f"Epoch {epoch+1}/{num_epochs_phase1} (Phase 1)")
 
-    for images, labels in tqdm(train_loader, desc=f"Training Epoch {epoch+1}"):
+    for batch_idx, (images, labels) in enumerate(tqdm(train_loader, desc=f"Training Epoch {epoch+1}")):
         images, labels = images.to(device), labels.to(device)
         optimizer.zero_grad()
-        with torch.amp.autocast("cuda"):
-            outputs = farseg(images)
-            loss = criterion(outputs, labels)
 
-        # Backpropagation with AMP
+        # Vérifications des entrées
+        assert not torch.isnan(images).any(), f"NaN detected in images at batch {batch_idx}"
+        assert not torch.isnan(labels).any(), f"NaN detected in labels at batch {batch_idx}"
+        assert labels.dtype == torch.long, f"Labels dtype incorrect: {labels.dtype}"
+        
+        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+            outputs = farseg(images)
+            
+            # Vérifications des sorties
+            assert not torch.isnan(outputs).any(), f"NaN detected in model outputs at batch {batch_idx}"
+            
+            loss = criterion(outputs, labels)
+            
+            # Vérifications de la perte
+            assert not torch.isnan(loss).any(), f"NaN detected in loss at batch {batch_idx}"
+
+        # Backpropagation avec AMP
         scaler.scale(loss).backward()
+        
+        # Vérifications des gradients
+        for name, param in farseg.named_parameters():
+            if param.grad is not None:
+                assert not torch.isnan(param.grad).any(), f"NaN detected in gradients of {name}"
+        
         scaler.step(optimizer)
         scaler.update()
 
@@ -157,10 +176,17 @@ for epoch in range(num_epochs_phase1):
     current_lr = optimizer.param_groups[0]["lr"]
     print(f"Epoch {epoch+1}, LR: {current_lr}, Loss: {running_loss/len(train_loader):.4f}")
     
+    # Évaluation sur l'ensemble de validation
     val_loss, val_miou = evaluate_model(farseg, val_loader, criterion, device=device, num_classes=8)
     print(f"Validation Loss : {val_loss:.4f}")
     print(f"Validation mIoU : {val_miou:.4f}")
+    
+    # Mise à jour du scheduler en fonction de la loss de validation
     scheduler.step(val_loss)
+    
+    # Vérification des poids NaN après mise à jour
+    for name, param in farseg.named_parameters():
+        assert not torch.isnan(param).any(), f"NaN detected in model weights of {name}"
 
 ###############################################################################
 # Phase 2 : Débloquer layer3
