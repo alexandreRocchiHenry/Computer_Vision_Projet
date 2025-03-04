@@ -179,20 +179,21 @@ def train_phase(num_epochs, phase_name):
 ###############################################################################
 
 print("Starting Phase 1")
-freeze_all_layers(farseg.backbone)
-unfreeze_module(farseg.backbone.layer4)
+
+freeze_all_layers(get_model(farseg).backbone)
+unfreeze_module(get_model(farseg).backbone.layer4)
 train_phase(num_epochs_phase1, "Phase1")
 
 print("Starting Phase 2")
-unfreeze_module(farseg.backbone.layer3)
+unfreeze_module(get_model(farseg).backbone.layer3)
 for param_group in optimizer.param_groups:
     param_group["lr"] = 1e-5
 train_phase(num_epochs_phase2, "Phase2")
 
 print("Starting Phase 3")
-unfreeze_module(farseg.backbone.layer2)
-unfreeze_module(farseg.backbone.layer1)
-unfreeze_module(farseg.backbone.conv1)
+unfreeze_module(get_model(farseg).backbone.layer2)
+unfreeze_module(get_model(farseg).backbone.layer1)
+unfreeze_module(get_model(farseg).backbone.conv1)
 for param_group in optimizer.param_groups:
     param_group["lr"] = 5e-6
 train_phase(num_epochs_phase3, "Phase3")
