@@ -4,6 +4,7 @@ import rasterio
 import torch
 import numpy as np
 from torch.utils.data import Dataset, DataLoader, default_collate
+from torchvision.transforms import RandomHorizontalFlip, RandomVerticalFlip
 import re
 from tqdm import tqdm
 
@@ -121,6 +122,21 @@ class FourBandSegDataset(Dataset):
             image_tensor, label_tensor = self.transform(image_tensor, label_tensor)
 
         return image_tensor, label_tensor
+
+
+class AugmentedDataset(FourBandSegDataset):
+    def __getitem__(self, idx):
+        image, label = super().__getitem__(idx)
+        
+        # Appliquer un flip horizontal avec une probabilité de 50%
+        if torch.rand(1) > 0.5:
+            image = torch.flip(image, dims=[2])  # Horizontal Flip
+        
+        # Appliquer un flip vertical avec une probabilité de 50%
+        if torch.rand(1) > 0.5:
+            image = torch.flip(image, dims=[1])  # Vertical Flip
+        
+        return image, label
 
 
 ###############################################################################

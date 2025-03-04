@@ -14,6 +14,7 @@ from torch.amp import GradScaler
 
 sys.path.append(os.path.abspath("src"))
 from dataloader import FourBandSegDataset
+from dataloader import AugmentedDataset
 from dataloader import skip_none_collate_fn
 from dataloader import evaluate_model
 
@@ -23,8 +24,22 @@ df_all = pd.read_csv("df_merged_extended.csv")
 # 2. Filtrer uniquement les lignes alignées
 df_filtered = df_all[df_all["alignment"] == True].copy().reset_index(drop=True)
 
-# 3. Mélanger les données
+# 3. Mélanger les données et definir les df pour chaque continent
 df_filtered_shuffled = df_filtered.sample(frac=1, random_state=42).reset_index(drop=True)
+
+df_afrique = df_filtered_shuffled[df_filtered_shuffled["continent"] == "Africa"].copy().reset_index(drop=True)
+df_asie = df_filtered_shuffled[df_filtered_shuffled["continent"] == "Asia"].copy().reset_index(drop=True)
+df_europe = df_filtered_shuffled[df_filtered_shuffled["continent"] == "Europe"].copy().reset_index(drop=True)
+df_north_america = df_filtered_shuffled[df_filtered_shuffled["continent"] == "North_america"].copy().reset_index(drop=True)
+df_oceania = df_filtered_shuffled[df_filtered_shuffled["continent"] == "Oceania"].copy().reset_index(drop=True)
+df_south_america = df_filtered_shuffled[df_filtered_shuffled["continent"] == "South_america"].copy().reset_index(drop=True)
+
+df_without_afrique = df_filtered_shuffled[~df_filtered_shuffled["continent"].isin(["Africa"])].copy().reset_index(drop=True)
+df_without_asie = df_filtered_shuffled[~df_filtered_shuffled["continent"].isin(["Asia"])].copy().reset_index(drop=True)
+df_without_europe = df_filtered_shuffled[~df_filtered_shuffled["continent"].isin(["Europe"])].copy().reset_index(drop=True)
+df_without_north_america = df_filtered_shuffled[~df_filtered_shuffled["continent"].isin(["North_america"])].copy().reset_index(drop=True)
+df_without_oceania = df_filtered_shuffled[~df_filtered_shuffled["continent"].isin(["Oceania"])].copy().reset_index(drop=True)
+df_without_south_america = df_filtered_shuffled[~df_filtered_shuffled["continent"].isin(["South_america"])].copy().reset_index(drop=True)
 
 # 4. Définir les proportions pour train / val / test
 train_ratio = 0.6
@@ -39,10 +54,18 @@ n_train = int(train_ratio * n_total)
 n_val = int(val_ratio * n_total)
 n_test = n_total - (n_train + n_val)
 
+# Ajout d'une partie pour les tests sur chaque continent et sans ce continent
+# Europe et Monde sans Europe pris en exemple
+n_total_wo_continent = len(df_without_europe)
+n_total_continent = len(df_europe)
+n_train_continent = int(train_ratio * n_total_wo_continent)
+n_val_continent = int(val_ratio * n_total_wo_continent)
+n_test_continent = int(test_ratio * n_total_continent)
+
 # 5. Découpage en trois sous-ensembles
-train_df = df_filtered_shuffled.iloc[:n_train].reset_index(drop=True)
-val_df = df_filtered_shuffled.iloc[n_train:n_train+n_val].reset_index(drop=True)
-test_df = df_filtered_shuffled.iloc[n_train+n_val:].reset_index(drop=True)
+train_df = df_without_europe.iloc[:n_train].reset_index(drop=True)
+val_df = df_without_europe.iloc[n_train:n_train+n_val].reset_index(drop=True)
+test_df = df_europe.iloc[n_train+n_val:].reset_index(drop=True)
 
 # 6. Instanciation des Dataset
 train_dataset = FourBandSegDataset(train_df)
