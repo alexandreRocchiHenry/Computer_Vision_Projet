@@ -10,6 +10,7 @@ from torchgeo.models import FarSeg
 import sys
 import os
 from tqdm import tqdm  # Importer tqdm pour les barres de progression
+from torch.amp import GradScaler
 
 sys.path.append(os.path.abspath("src"))
 from dataloader import FourBandSegDataset
@@ -130,6 +131,9 @@ print("Start the training")
 ###############################################################################
 # Phase 1 : Entraîner layer4 + head FarSeg
 ###############################################################################
+scaler = GradScaler("cuda")   # Define AMP scaler
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
+
 
 for epoch in range(num_epochs_phase1):
     farseg.train()
@@ -139,16 +143,24 @@ for epoch in range(num_epochs_phase1):
     for images, labels in tqdm(train_loader, desc=f"Training Epoch {epoch+1}"):
         images, labels = images.to(device), labels.to(device)
         optimizer.zero_grad()
-        outputs = farseg(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+        with torch.amp.autocast("cuda"):
+            outputs = farseg(images)
+            loss = criterion(outputs, labels)
+
+        # Backpropagation with AMP
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
         running_loss += loss.item()
 
-    print(f"Epoch {epoch+1} Loss: {running_loss/len(train_loader):.4f}")
+    current_lr = optimizer.param_groups[0]["lr"]
+    print(f"Epoch {epoch+1}, LR: {current_lr}, Loss: {running_loss/len(train_loader):.4f}")
+    
     val_loss, val_miou = evaluate_model(farseg, val_loader, criterion, device=device, num_classes=8)
     print(f"Validation Loss : {val_loss:.4f}")
     print(f"Validation mIoU : {val_miou:.4f}")
+    scheduler.step(val_loss)
 
 ###############################################################################
 # Phase 2 : Débloquer layer3
@@ -156,25 +168,40 @@ for epoch in range(num_epochs_phase1):
 unfreeze_module(get_model(farseg).backbone.layer3)
 for param_group in optimizer.param_groups:
     param_group["lr"] = 1e-5
-print("Learning rate : ",param_group["lr"])
+print("Learning rate : ", param_group["lr"])
+
 for epoch in range(num_epochs_phase2):
     farseg.train()
     running_loss = 0.0
     print(f"Epoch {epoch+1}/{num_epochs_phase2} (Phase 2)")
-    
+
     for images, labels in tqdm(train_loader, desc=f"Training Epoch {epoch+1}"):
         images, labels = images.to(device), labels.to(device)
         optimizer.zero_grad()
-        outputs = farseg(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+        
+        # Apply AMP for forward pass
+        with torch.amp.autocast("cuda"):
+            outputs = farseg(images)
+            loss = criterion(outputs, labels)
+
+        # Backpropagation with AMP
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
         running_loss += loss.item()
-    
-    print(f"Epoch {epoch+1} Loss: {running_loss/len(train_loader):.4f}")
+
+    current_lr = optimizer.param_groups[0]["lr"]
+    print(f"Epoch {epoch+1}, LR: {current_lr}, Loss: {running_loss/len(train_loader):.4f}")
+
+    # Evaluate on validation set
     val_loss, val_miou = evaluate_model(farseg, val_loader, criterion, device=device, num_classes=8)
     print(f"Validation Loss : {val_loss:.4f}")
     print(f"Validation mIoU : {val_miou:.4f}")
+
+    # Update scheduler based on validation loss
+    scheduler.step(val_loss)
+
 
 ###############################################################################
 # Phase 3 : Débloquer tout le backbone
@@ -185,28 +212,43 @@ unfreeze_module(get_model(farseg).backbone.conv1)
 
 for param_group in optimizer.param_groups:
     param_group["lr"] = 5e-6
-print("Learning rate : ",param_group["lr"])
+print("Learning rate : ", param_group["lr"])
 
 for epoch in range(num_epochs_phase3):
     farseg.train()
     running_loss = 0.0
     print(f"Epoch {epoch+1}/{num_epochs_phase3} (Phase 3)")
-    
+
     for images, labels in tqdm(train_loader, desc=f"Training Epoch {epoch+1}"):
         images, labels = images.to(device), labels.to(device)
         optimizer.zero_grad()
-        outputs = farseg(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
+        
+        # Apply AMP for forward pass
+        with torch.amp.autocast("cuda"):
+            outputs = farseg(images)
+            loss = criterion(outputs, labels)
+
+        # Backpropagation with AMP
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+
         running_loss += loss.item()
-    
-    print(f"Epoch {epoch+1} Loss: {running_loss/len(train_loader):.4f}")
+
+    current_lr = optimizer.param_groups[0]["lr"]
+    print(f"Epoch {epoch+1}, LR: {current_lr}, Loss: {running_loss/len(train_loader):.4f}")
+
+    # Evaluate on validation set
     val_loss, val_miou = evaluate_model(farseg, val_loader, criterion, device=device, num_classes=8)
     print(f"Validation Loss : {val_loss:.4f}")
     print(f"Validation mIoU : {val_miou:.4f}")
 
+    # Update scheduler based on validation loss
+    scheduler.step(val_loss)
+
+
 print("Entraînement terminé !")
+
 
 # save model
 torch.save(get_model(farseg).state_dict(), "models/farseg_model.pth")
