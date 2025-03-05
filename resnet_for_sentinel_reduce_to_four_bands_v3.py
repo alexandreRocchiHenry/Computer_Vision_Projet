@@ -65,7 +65,7 @@ n_test_continent = int(test_ratio * n_total_continent)
 # 5. Découpage en trois sous-ensembles
 train_df = df_without_europe.iloc[:n_train].reset_index(drop=True)
 val_df = df_without_europe.iloc[n_train:n_train+n_val].reset_index(drop=True)
-test_df = df_europe.iloc[n_train+n_val:].reset_index(drop=True)
+test_df = df_europe.copy().reset_index(drop=True)
 
 # 6. Instanciation des Dataset
 train_dataset = FourBandSegDataset(train_df)
