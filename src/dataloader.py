@@ -126,51 +126,9 @@ class FourBandSegDataset(Dataset):
             transforms.RandomResizedCrop(size=(224, 224), scale=(0.8, 1.0))
         ])
 
-        if self.transform is not None:
-
-            image_rgb = image[:3,:,:]  # [3, H, W]
-            image_alpha = image[3,:,:]  # [H, W]
-
-            mask_1 = label_8bands[0,:,:]  # [H, W]
-            mask_2 = label_8bands[1,:,:]  # [H, W]
-            mask_3 = label_8bands[2,:,:]  # [H, W]
-            mask_4 = label_8bands[3,:,:]  # [H, W]
-            mask_5 = label_8bands[4,:,:]  # [H, W]
-            mask_6 = label_8bands[5,:,:]  # [H, W]
-            mask_7 = label_8bands[6,:,:]  # [H, W]
-            mask_8 = label_8bands[7,:,:]  # [H, W]
-
-            image_rgb = F.to_pil_image(image_rgb)
-            image_alpha = F.to_pil_image(image_alpha)
-
-            mask_1 = F.to_pil_image(mask_1)
-            mask_2 = F.to_pil_image(mask_2)
-            mask_3 = F.to_pil_image(mask_3)
-            mask_4 = F.to_pil_image(mask_4)
-            mask_5 = F.to_pil_image(mask_5)
-            mask_6 = F.to_pil_image(mask_6)
-            mask_7 = F.to_pil_image(mask_7)
-            mask_8 = F.to_pil_image(mask_8)
-
-            image_rgb = data_augmentation(image_rgb)
-            image_alpha = data_augmentation(image_alpha)
-
-            mask_1 = data_augmentation(mask_1)
-            mask_2 = data_augmentation(mask_2)
-            mask_3 = data_augmentation(mask_3)
-            mask_4 = data_augmentation(mask_4)
-            mask_5 = data_augmentation(mask_5)
-            mask_6 = data_augmentation(mask_6)
-            mask_7 = data_augmentation(mask_7)
-            mask_8 = data_augmentation(mask_8)
-
-            image_tensor = torch.cat([image_rgb, image_alpha.unsqueeze(-1)], dim=-1)
-            label_tensor = torch.stack([mask_1, mask_2, mask_3, mask_4, mask_5, mask_6, mask_7, mask_8], dim=0)
-            
-        else :
-            # Conversion en tenseurs PyTorch
-            image_tensor = torch.from_numpy(image).float()  # [4, H, W]
-            label_tensor = torch.from_numpy(class_indices).long()  # [H, W]
+        
+        image_tensor = torch.from_numpy(image).float()  # [4, H, W]
+        label_tensor = torch.from_numpy(class_indices).long()  # [H, W]
 
         # Normalisation Min-Max entre 0 et 1
         image_tensor = (image_tensor - image_tensor.min()) / (image_tensor.max() - image_tensor.min())
