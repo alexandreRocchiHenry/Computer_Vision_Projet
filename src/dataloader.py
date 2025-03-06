@@ -9,6 +9,11 @@ from torchvision.transforms import RandomHorizontalFlip, RandomVerticalFlip
 import re
 from tqdm import tqdm
 
+import sys
+
+sys.path.append(os.path.abspath("src"))
+from dataaugmentationsatellite import SatelliteAugmentation
+
 ###############################################################################
 #                  FONCTION COLLATE POUR IGNORER LES ÉCHANTILLONS None
 ###############################################################################
@@ -50,10 +55,16 @@ class FourBandSegDataset(Dataset):
     Seules les lignes avec alignment == True sont utilisées.
     """
 
-    def __init__(self, dataframe, transform=None):
+    def __init__(self, dataframe, apply_augmentation=False):
         df_filtered = dataframe[dataframe['alignment'] == True].copy().reset_index(drop=True)
         self.df = df_filtered
-        self.transform = transform  # Transformations éventuelles
+        self.apply_augmentation = apply_augmentation
+
+       
+        if self.apply_augmentation:
+            self.transform = SatelliteAugmentation()
+        else:
+            self.transform = None
 
     def __len__(self):
         return len(self.df)
@@ -169,6 +180,10 @@ class FourBandSegDataset(Dataset):
         std = torch.tensor([0.229, 0.224, 0.225, 0.5]).view(4, 1, 1)    # ImageNet + 4e bande
         image_tensor = (image_tensor - mean) / std
 
+        # (Optionnel) transformations / augmentations
+        if self.apply_augmentation and self.transform is not None:
+            image_tensor, label_tensor = self.transform(image_tensor, label_tensor)
+
         return image_tensor, label_tensor
 
 
@@ -203,14 +218,16 @@ def compute_iou_per_class(pred, target, num_classes=8, ignore_index=255):
         ious.append(iou)
     return ious
 
-
 def evaluate_model(model, val_loader, criterion, device, num_classes=8, ignore_index=255):
     """
-    Évalue la perte moyenne (loss) et le mIoU du modèle sur l’ensemble de validation.
+    Évalue la perte moyenne (loss), l’IoU moyen (mIoU) et la précision (Accuracy)
+    du modèle sur l’ensemble de validation.
     """
     model.eval()
     running_loss = 0.0
     all_ious = []
+    total_correct = 0  # Compteur des pixels correctement classés
+    total_pixels = 0   # Nombre total de pixels valides (excluant 255)
 
     with torch.no_grad():
         for images, labels in tqdm(val_loader, desc="Validation"):
@@ -222,7 +239,7 @@ def evaluate_model(model, val_loader, criterion, device, num_classes=8, ignore_i
             
             # Prédiction classe par pixel
             preds = torch.argmax(outputs, dim=1)  # [batch_size, H, W]
-            
+
             # Calcul de l’IoU par classe pour chaque image du batch
             for i in range(len(preds)):
                 ious = compute_iou_per_class(
@@ -231,13 +248,23 @@ def evaluate_model(model, val_loader, criterion, device, num_classes=8, ignore_i
                     ignore_index=ignore_index
                 )
                 all_ious.append(ious)
-    
+
+                # Masque des pixels valides (non 255)
+                valid_mask = labels[i] != ignore_index
+
+                # Calcul de l’Accuracy
+                total_correct += torch.sum((preds[i] == labels[i]) * valid_mask).item()
+                total_pixels += torch.sum(valid_mask).item()
+
     # Moyenne de la perte sur tout le jeu de validation
     val_loss = running_loss / len(val_loader) if len(val_loader) > 0 else 0.0
 
     # Calcul du mIoU
     all_ious = np.array(all_ious)  # shape = (total_images, num_classes)
-    mean_iou_per_class = np.nanmean(all_ious, axis=0)  # moyenne par colonne
-    miou = np.nanmean(mean_iou_per_class)               # moyenne sur les classes
+    mean_iou_per_class = np.nanmean(all_ious, axis=0)  # Moyenne par classe
+    miou = np.nanmean(mean_iou_per_class)               # Moyenne sur les classes
 
-    return val_loss, miou
+    # Calcul de l’Accuracy
+    accuracy = total_correct / total_pixels if total_pixels > 0 else 0.0  # Évite la division par zéro
+
+    return val_loss, miou, accuracy
