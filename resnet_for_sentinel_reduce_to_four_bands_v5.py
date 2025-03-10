@@ -146,10 +146,10 @@ farseg = farseg.to(device)
 criterion = nn.CrossEntropyLoss(ignore_index=255)
 optimizer = optim.Adam(filter(lambda p: p.requires_grad, farseg.parameters()), lr=1e-4)
 
-num_epochs_phase1 = 30  
-num_epochs_phase2 = 30
-num_epochs_phase3 = 50
-patience = 5 
+num_epochs_phase1 = 40  
+num_epochs_phase2 = 40
+num_epochs_phase3 = 60
+patience = 10
 
 
 print("Start the training")

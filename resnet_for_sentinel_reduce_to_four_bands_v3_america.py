@@ -56,16 +56,16 @@ n_test = n_total - (n_train + n_val)
 
 # Ajout d'une partie pour les tests sur chaque continent et sans ce continent
 # Europe et Monde sans Europe pris en exemple
-n_total_wo_continent = len(df_without_europe)
-n_total_continent = len(df_europe)
+n_total_wo_continent = len(df_without_north_america)
+n_total_continent = len(df_north_america)
 n_train_continent = int(train_ratio * n_total_wo_continent)
 n_val_continent = int(val_ratio * n_total_wo_continent)
 n_test_continent = int(test_ratio * n_total_continent)
 
 # 5. Découpage en trois sous-ensembles
-train_df = df_without_afrique.iloc[:n_train].reset_index(drop=True)
-val_df = df_without_afrique.iloc[n_train:n_train+n_val].reset_index(drop=True)
-test_df = df_afrique.copy().reset_index(drop=True)
+train_df = df_without_north_america.iloc[:n_train].reset_index(drop=True)
+val_df = df_without_north_america.iloc[n_train:n_train+n_val].reset_index(drop=True)
+test_df = df_north_america.copy().reset_index(drop=True)
 
 # 6. Instanciation des Dataset
 train_dataset = FourBandSegDataset(train_df)
@@ -92,53 +92,139 @@ print("Taille Test         :", len(test_dataset))
 
 print("Chargement DataLoaders terminé.")
 
-# Get some sample images from the test_loader
-data_iter = iter(test_loader)
-images, labels = next(data_iter)  # Get a batch of test images
+# Charger le ResNet pré-entraîné
+model_resnet = resnet50(weights=ResNet50_Weights.SENTINEL2_ALL_MOCO)
+state_dict_res = model_resnet.state_dict()
+state_dict_res.pop("conv1.weight", None)
+state_dict_res.pop("conv1.bias", None)
 
+# Créer le FarSeg
+farseg = FarSeg(backbone="resnet50", classes=8, backbone_pretrained=False)
+
+# Modifier la première couche convolutive
+old_conv = farseg.backbone.conv1
+new_conv = nn.Conv2d(
+    in_channels=4, out_channels=old_conv.out_channels, kernel_size=old_conv.kernel_size,
+    stride=old_conv.stride, padding=old_conv.padding, bias=(old_conv.bias is not None),
+)
+new_conv.weight.data[:, :3, :, :] = model_resnet.conv1.weight.data[:, :3, :, :]
+nn.init.kaiming_normal_(new_conv.weight.data[:, 3:4, :, :])
+farseg.backbone.conv1 = new_conv
+farseg.backbone.load_state_dict(state_dict_res, strict=False)
+print("Model Created")
+
+# Fonctions pour gérer DataParallel
+def get_model(farseg):
+    """Retourne le modèle encapsulé dans DataParallel si nécessaire."""
+    return farseg.module if isinstance(farseg, nn.DataParallel) else farseg
+
+def freeze_all_layers(model):
+    for param in model.parameters():
+        param.requires_grad = False
+
+def unfreeze_module(module):
+    for param in module.parameters():
+        param.requires_grad = True
+
+print("Start freezing all")
+freeze_all_layers(get_model(farseg).backbone)
+unfreeze_module(get_model(farseg).backbone.layer4)
+
+for name, param in get_model(farseg).named_parameters():
+    if "head" in name:
+        param.requires_grad = True
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print("Using the device : ", device)
+print("Nombre de GPUs :", torch.cuda.device_count())
+
+if torch.cuda.device_count() > 1:
+    farseg = nn.DataParallel(farseg, device_ids=list(range(torch.cuda.device_count())))
+
+farseg = farseg.to(device)
 
 criterion = nn.CrossEntropyLoss(ignore_index=255)
-# Move to device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-images = images.to(device)
-labels = labels.to(device)
+optimizer = optim.Adam(filter(lambda p: p.requires_grad, farseg.parameters()), lr=1e-4)
 
-def visualize_results(images, labels, predictions, num_samples=4):
-    """
-    Visualize original images, ground truth masks, and predicted segmentation masks.
-    """
-    fig, axes = plt.subplots(num_samples, 3, figsize=(12, num_samples * 3))
-    
-    for i in range(num_samples):
-        img = images[i].cpu().numpy().transpose(1, 2, 0)  # Convert to (H, W, C)
-        label = labels[i].cpu().numpy()
-        pred = predictions[i].cpu().numpy()
-
-        # Extraire seulement les 3 premiers canaux pour visualisation RGB
-        img_rgb = img[:, :, :3]  # Supposons que les 3 premiers canaux correspondent à RGB
-
-        # Normalisation
-        img_rgb = (img_rgb - img_rgb.min()) / (img_rgb.max() - img_rgb.min())
-        img_rgb = (img_rgb * 255).astype("uint8")
-
-        axes[i, 0].imshow(img_rgb)  # Affichage en RGB
+num_epochs_phase1 = 30  
+num_epochs_phase2 = 30
+num_epochs_phase3 = 50
+patience = 5 
 
 
-        axes[i, 0].imshow(img)
-        axes[i, 0].set_title("Original Image")
-        axes[i, 0].axis("off")
+print("Start the training")
+###############################################################################
+# Fonction de train
+###############################################################################
+scaler = GradScaler(enabled=True)  # Activation de l'AMP (désactivez en cas de problème)
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=3)
 
-        axes[i, 1].imshow(label, cmap="jet")
-        axes[i, 1].set_title("Ground Truth")
-        axes[i, 1].axis("off")
+def train_phase(num_epochs, phase_name):
+    best_val_loss = float('inf')
+    patience_counter = 0
+    for epoch in range(num_epochs):
+        farseg.train()
+        running_loss = 0.0
+        print(f"Epoch {epoch+1}/{num_epochs} ({phase_name})")
 
-        axes[i, 2].imshow(pred, cmap="jet")
-        axes[i, 2].set_title("Prediction")
-        axes[i, 2].axis("off")
+        for images, labels in tqdm(train_loader, desc=f"Training Epoch {epoch+1}"):
+            images, labels = images.to(device), labels.to(device)
+            optimizer.zero_grad()
 
-    plt.tight_layout()
-    plt.show()
-    
+            with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
+                outputs = farseg(images)
+                loss = criterion(outputs, labels)
+
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
+            running_loss += loss.item()
+
+        val_loss, val_miou, val_accuracy = evaluate_model(farseg, val_loader, criterion, device=device, num_classes=8)
+        scheduler.step(val_loss)
+
+        print(f"Validation Loss: {val_loss:.4f} | Validation mIoU: {val_miou:.4f} | Validation Accuracy: {val_accuracy:.4f}")
+
+        # Early stopping check
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            torch.save(farseg.state_dict(), f"models/best_model_{phase_name}_north_america.pth")
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print("Early stopping triggered.")
+                break
+
+###############################################################################
+# Training
+###############################################################################
+
+print("Starting Phase 1")
+
+freeze_all_layers(get_model(farseg).backbone)
+unfreeze_module(get_model(farseg).backbone.layer4)
+train_phase(num_epochs_phase1, "Phase1")
+
+print("Starting Phase 2")
+unfreeze_module(get_model(farseg).backbone.layer3)
+for param_group in optimizer.param_groups:
+    param_group["lr"] = 1e-5
+train_phase(num_epochs_phase2, "Phase2")
+
+print("Starting Phase 3")
+unfreeze_module(get_model(farseg).backbone.layer2)
+unfreeze_module(get_model(farseg).backbone.layer1)
+unfreeze_module(get_model(farseg).backbone.conv1)
+for param_group in optimizer.param_groups:
+    param_group["lr"] = 5e-6
+train_phase(num_epochs_phase3, "Phase3")
+print("Entraînement terminé !")
+
+
+# save model
+torch.save(get_model(farseg).state_dict(), "models/farseg_model_north_america.pth")
 
 ###############################################################################
 # Phase 4 : Évaluation
@@ -154,7 +240,7 @@ new_conv = nn.Conv2d(
 )
 
 # Initialize the first three channels with trained weights and the fourth with random values
-state_dict = torch.load("models/farseg_model.pth")
+state_dict = torch.load("models/farseg_model_north_america.pth")
 new_conv.weight.data[:, :3, :, :] = state_dict["backbone.conv1.weight"][:, :3, :, :]
 nn.init.kaiming_normal_(new_conv.weight.data[:, 3:4, :, :])  # Random init for the 4th channel
 
@@ -173,9 +259,9 @@ farseg_best.to(device)
 farseg_best.eval()
 
 if torch.cuda.device_count() > 1:
-    farseg_best = nn.DataParallel(farseg_best, device_ids=list(range(torch.cuda.device_count())))
+    farseg = nn.DataParallel(farseg, device_ids=list(range(torch.cuda.device_count())))
 
-farseg_best = farseg_best.to(device)
+farseg = farseg.to(device)
 # 2) Évaluation sur le test set
 test_loss, test_miou, test_acc = evaluate_model(
     farseg_best,
@@ -185,10 +271,6 @@ test_loss, test_miou, test_acc = evaluate_model(
     num_classes=8
 )
 
-print(f"Test Loss  : {test_loss:.4f}")
-print(f"Test mIoU  : {test_miou:.4f}")
-print(f"Test Accuracy: {test_acc:.4f}")  # Affichage de l’accuracy
-
-
-# Call the visualization function
-visualize_results(images, labels, predictions, num_samples=4)
+print(f"Test Loss : {test_loss:.4f}")
+print(f"Test mIoU : {test_miou:.4f}")
+print(f"Test Accuracy : {test_acc:.4f}")
